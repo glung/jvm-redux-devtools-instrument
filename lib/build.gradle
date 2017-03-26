@@ -13,16 +13,27 @@ configurations {
 
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    compile 'com.github.glung:jvm-redux:-SNAPSHOT'
+    compile 'com.github.jvm-redux.jvm-redux-api:api:creator-creates-store-with-reducer-type-SNAPSHOT'
 
     testCompile 'junit:junit:4.12'
     testCompile 'org.jetbrains.spek:spek:1.0.9'
     testCompile 'org.assertj:assertj-core:3.5.2'
-    testCompile 'com.github.glung.jvm-redux:adapter-bansa:-SNAPSHOT'
-    testCompile 'com.github.glung.jvm-redux:adapter-kedux:-SNAPSHOT'
-    testCompile 'com.github.glung.jvm-redux:adapter-reduks:-SNAPSHOT'
-    testCompile 'com.github.glung.jvm-redux:adapter-redux-java:-SNAPSHOT'
-    testCompile 'com.github.glung.jvm-redux:adapter-redux-kotlin:-SNAPSHOT'
+    // TODO Re-enable when the API is officially supported
+    // testCompile 'com.github.pardom:redux-kotlin:1.2.1'
+    testCompile 'com.github.glung.redux-java:lib:api-creator-creates-store-with-reducer-type_enhancer-SNAPSHOT'
+
 
     ktlint 'com.github.shyiko:ktlint:0.1.2'
+}
+buildscript {
+    ext.kotlin_version = '1.0.6'
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath "org.jetbrains.kotlin:kotlin-gradle-plugin:$kotlin_version"
+    }
+}
+sourceSets {
+    main.java.srcDirs += 'src/main/kotlin'
 }

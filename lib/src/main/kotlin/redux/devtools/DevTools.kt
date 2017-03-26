@@ -43,9 +43,8 @@ class DevTools<T : Any> {
 
         object : Store.Creator {
             // S must be the same as S
-            override fun <S : Any> create(reducer: Reducer<S>, initialState: S, enhancer: Store.Enhancer?): Store<S> {
-                fun liftReducer(reducer: Reducer<S>) =
-                        liftReducerWith(reducer, initialState, maxAge)
+            override fun <S : Any> create(reducer: Reducer<S>, initialState: S): Store<S> {
+                fun liftReducer(reducer: Reducer<S>) = liftReducerWith(reducer, initialState, maxAge)
 
                 fun <S : Any> unliftState(devToolsState: DevToolsState<S>) =
                         devToolsState.computedStates[devToolsState.currentStateIndex]
@@ -62,13 +61,22 @@ class DevTools<T : Any> {
                     override fun subscribe(subscriber: Store.Subscriber): Store.Subscription = devToolsStore.subscribe(subscriber)
 
                     override fun getState(): S {
-                        return unliftState(devToolsStore.getState())
+                        return unliftState(devToolsStore.state)
                     }
                 }
 
                 val devToolsReducer: Reducer<DevToolsState<S>> = liftReducer(reducer)
-                val liftedInitialState = liftState(initialState)
-                val liftedStore = leafCreator.create(devToolsReducer, liftedInitialState, enhancer)
+                val initialDevToolState = DevToolsState(
+                        actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.INIT))),
+                        nextActionId = 1,
+                        stagedActionIds = listOf(0),
+                        skippedActionIds = emptyList(),
+                        currentStateIndex = 0,
+                        committedState = initialState,
+                        computedStates = emptyList()
+                )
+
+                val liftedStore = leafCreator.create(devToolsReducer, initialDevToolState)
                 val unliftedStore = unliftStore(liftedStore)
 
                 // T must be the same type as S or it sends an exception here.
@@ -83,46 +91,34 @@ class DevTools<T : Any> {
 
         private val INFINITY = Int.MAX_VALUE
 
-        private fun <S : Any> liftState(initialState: S): DevToolsState<S> {
-            return DevToolsState(
-                    actionsById = emptyMap(),
-                    nextActionId = 0,
-                    stagedActionIds = emptyList(),
-                    skippedActionIds = emptyList(),
-                    currentStateIndex = -1,
-                    committedState = initialState,
-                    computedStates = emptyList()
-            )
-        }
-
         private fun <S : Any> liftReducerWith(reducer: Reducer<S>, initialCommittedState: S, maxAge: Int): Reducer<DevToolsState<S>> {
-            return Reducer { state: DevToolsState<S>, action: Any ->
+            return Reducer { liftedState: DevToolsState<S>, liftedAction: Any ->
                 var minInvalidatedStateIndex = 0
 
-                val newState = when (action) {
+                val newState = when (liftedAction) {
                     is DevToolsAction.Reset -> reset(initialCommittedState)
-                    is DevToolsAction.Commit -> commit(state)
-                    is DevToolsAction.Rollback -> rollback(state)
+                    is DevToolsAction.Commit -> commit(liftedState)
+                    is DevToolsAction.Rollback -> rollback(liftedState)
                     is DevToolsAction.ToggleAction -> {
-                        with(toggleAction(action, state)) {
+                        with(toggleAction(liftedAction, liftedState)) {
                             // Optimization: we know history before this action hasn't changed
-                            minInvalidatedStateIndex = stagedActionIds.indexOf(action.index)
+                            minInvalidatedStateIndex = stagedActionIds.indexOf(liftedAction.index)
                             this
                         }
                     }
                     is DevToolsAction.SetActionsActive -> {
                         // Optimization: we know history before this action hasn't changed
-                        minInvalidatedStateIndex = state.stagedActionIds.indexOf(action.start)
-                        setActionsActive(action, state)
+                        minInvalidatedStateIndex = liftedState.stagedActionIds.indexOf(liftedAction.start)
+                        setActionsActive(liftedAction, liftedState)
                     }
                     is DevToolsAction.JumpToState -> {
                         // Optimization: we know the history has not changed.
                         minInvalidatedStateIndex = INFINITY
-                        jumpToState(action, state)
+                        jumpToState(liftedAction, liftedState)
                     }
-                    is DevToolsAction.Sweep -> sweep(state)
+                    is DevToolsAction.Sweep -> sweep(liftedState)
                     is DevToolsAction.PerformAction -> {
-                        with(performAction(action, state, maxAge)) {
+                        with(performAction(liftedAction, liftedState, maxAge)) {
                             // Optimization: we know that only the new action needs computing.
                             minInvalidatedStateIndex = stagedActionIds.size - 1;
                             this
@@ -131,24 +127,26 @@ class DevTools<T : Any> {
                     is DevToolsAction.ImportState<*> -> {
                         // Completely replace everything.
                         minInvalidatedStateIndex = 0
-                        action.state.copy() as DevToolsState<S>
+                        liftedAction.state.copy() as DevToolsState<S>
                     }
                     is DevToolsAction.ImportActions -> {
                         // Completely replace everything.
                         minInvalidatedStateIndex = 0
-                        importActions(action, initialCommittedState)
-                    }
-                    is Store.Companion.INIT -> {
-                        // Always recompute states on hot reload and init.
-                        minInvalidatedStateIndex = 0
-                        // TODO : is it a reset ?
-                        performAction(DevToolsAction.PerformAction(action), liftState(initialCommittedState), maxAge)
+                        importActions(liftedAction, initialCommittedState)
                     }
                     else -> {
-                        // If the action is not recognized, it's a monitor action.
-                        // Optimization: a monitor action can't change history.
-                        minInvalidatedStateIndex = INFINITY
-                        state
+                        if (liftedAction == Store.INIT) {
+                            // Always recompute states on hot reload and init.
+                            val recomputeStates = recomputeStates(liftedState, 0, reducer)
+
+                            minInvalidatedStateIndex = INFINITY
+                            liftedState.copy(computedStates = recomputeStates)
+                        } else {
+                            // If the action is not recognized, it's a monitor action.
+                            // Optimization: a monitor action can't change history.
+                            minInvalidatedStateIndex = INFINITY
+                            liftedState
+                        }
                     }
                 }
                 if (minInvalidatedStateIndex == INFINITY) {
@@ -160,7 +158,7 @@ class DevTools<T : Any> {
         }
 
         private fun <S : Any> importActions(action: DevToolsAction.ImportActions, initialCommittedState: S): DevToolsState<S> {
-            val actions = listOf(Store.Companion.INIT) + action.actions
+            val actions = listOf(Store.INIT) + action.actions
             val actionsById = actions.mapIndexed { i, action -> i to DevToolsAction.PerformAction(action) }.toMap()
             return reset(initialCommittedState).copy(
                     actionsById = actionsById,
@@ -262,7 +260,7 @@ class DevTools<T : Any> {
         // Start again from the last committed state.
         private fun <S : Any> rollback(state: DevToolsState<S>): DevToolsState<S> {
             return state.copy(
-                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.Companion.INIT))),
+                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.INIT))),
                     nextActionId = 1,
                     stagedActionIds = listOf(0),
                     skippedActionIds = emptyList(),
@@ -275,7 +273,7 @@ class DevTools<T : Any> {
         // Squash any staged actions into a single committed state.
         private fun <S : Any> commit(state: DevToolsState<S>): DevToolsState<S> {
             return state.copy(
-                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.Companion.INIT))),
+                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.INIT))),
                     nextActionId = 1,
                     stagedActionIds = listOf(0),
                     skippedActionIds = emptyList(),
@@ -288,7 +286,7 @@ class DevTools<T : Any> {
         // Get back to the state the store was created with.
         private fun <S : Any> reset(initialCommittedState: S): DevToolsState<S> {
             return DevToolsState(
-                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.Companion.INIT))),
+                    actionsById = mapOf(Pair(0, DevToolsAction.PerformAction(Store.INIT))),
                     committedState = initialCommittedState,
                     nextActionId = 0,
                     stagedActionIds = listOf(0),
@@ -300,11 +298,7 @@ class DevTools<T : Any> {
 
         private fun <S : Any> recomputeStates(storeState: DevToolsState<S>, minInvalidatedStateIndex: Int, reducer: Reducer<S>): List<S> {
             with(storeState) {
-                val previousStatesToKeep = if (minInvalidatedStateIndex > 0) {
-                    computedStates.slice(0..minInvalidatedStateIndex - 1)
-                } else {
-                    emptyList<S>()
-                }
+                val previousStatesToKeep = computedStates.slice(0..minInvalidatedStateIndex - 1)
 
                 val nextComputedStates = previousStatesToKeep.toMutableList()
                 for (i: Int in minInvalidatedStateIndex..stagedActionIds.size - 1) {
