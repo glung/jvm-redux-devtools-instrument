@@ -13,14 +13,14 @@ configurations {
 
 dependencies {
     compile "org.jetbrains.kotlin:kotlin-stdlib:$kotlin_version"
-    compile 'com.github.jvm-redux.jvm-redux-api:api:creator-creates-store-with-reducer-type-SNAPSHOT'
+    compile 'com.github.jvm-redux.jvm-redux-api:api:2.0.0'
 
     testCompile 'junit:junit:4.12'
     testCompile 'org.jetbrains.spek:spek:1.0.9'
     testCompile 'org.assertj:assertj-core:3.5.2'
     // TODO Re-enable when the API is officially supported
     // testCompile 'com.github.pardom:redux-kotlin:1.2.1'
-    testCompile 'com.github.glung.redux-java:lib:api-creator-creates-store-with-reducer-type_enhancer-SNAPSHOT'
+    testCompile 'com.github.glung.redux-java:lib:1.1'
 
 
     ktlint 'com.github.shyiko:ktlint:0.1.2'
